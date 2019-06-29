@@ -30,12 +30,38 @@ module CaptureMigrationSql
 
       payload = event.payload
       return if IGNORE_PAYLOAD_NAMES.include?(payload[:name])
-      sql = payload[:sql]
+      sql = sql_from_payload payload
       return if sql.nil? || IGNORE_STATEMENTS.match(sql)
 
       sql = sql.strip
       sql = "#{sql};" unless sql.end_with?(";")
       stream.write("#{sql}\n\n")
+    end
+
+    def sql_from_payload(payload)
+      if payload[:binds] == []
+        payload[:sql]
+      else
+        prepared_stmt payload
+      end
+    end
+
+    def prepared_stmt(payload)
+      types = payload[:binds].map do 'unknown' end
+      vars = payload[:binds].map do |b|
+        if ((b.type.class == ActiveModel::Type::String) ||
+            (b.type.class == ActiveRecord::Type::Text))
+          "'#{b.value}'"
+        else
+          b.value_for_database
+        end
+      end
+      stmts = [
+        "prepare _tmpqry (#{types.join ','}) as\n#{payload[:sql]}",
+        "execute _tmpqry (#{vars.join ','})",
+        "deallocate _tmpqry"
+      ]
+      stmts.join ";\n"
     end
   end
 end
